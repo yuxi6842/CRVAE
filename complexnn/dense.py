@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# original code link: https://github.com/ChihebTrabelsi/deep_complex_networks
+#
 # Authors: Chiheb Trabelsi
 #
 import tensorflow as tf
@@ -9,13 +9,11 @@ from tensorflow import keras
 
 from tensorflow.keras import backend as K
 import sys
-
 sys.path.append('.')
 import tensorflow.compat.v1 as tf
 from tensorflow.keras import activations, initializers, regularizers, constraints
 from tensorflow.keras.layers import Layer, InputSpec
 import numpy as np
-
 
 class ComplexDense(Layer):
     """Regular complex densely-connected NN layer.
@@ -74,7 +72,6 @@ class ComplexDense(Layer):
                  kernel_constraint=None,
                  bias_constraint=None,
                  seed=None,
-                 dtype=tf.complex128,
                  **kwargs):
         if 'input_shape' not in kwargs and 'input_dim' in kwargs:
             kwargs['input_shape'] = (kwargs.pop('input_dim'),)
@@ -99,77 +96,80 @@ class ComplexDense(Layer):
             self.seed = seed
         self.input_spec = InputSpec(ndim=2)
         self.supports_masking = True
-        self._dtype = dtype
+
 
     def build(self, input_shape):
-        if self._dtype == tf.complex64:
-            temp_dtype = tf.float32
-        else:
-            temp_dtype = tf.float64
-        input_dim = input_shape[-1]
+        input_dim = input_shape[-1]//2
         tf.get_seed(self.seed)
         kernel_shape = (int(input_dim), self.units)
 
+        # real_init = tf.keras.initializers.glorot_uniform(self.seed)
+        # imag_init = tf.keras.initializers.glorot_uniform(self.seed)
+
         val = np.math.sqrt(6. / (int(input_dim) + self.units)) * 0.5
+        # val = 6. / (int(input_dim) + self.units)
         self.real_kernel = tf.Variable(
             shape=kernel_shape,
-            initial_value=tf.random.uniform(kernel_shape, minval=-val, maxval=val, dtype=temp_dtype),
+            initial_value=tf.random.uniform(kernel_shape, minval=-val, maxval=val, dtype=tf.float32),
             name='real_kernel',
             trainable=True,
-            dtype=temp_dtype
+            dtype=tf.float32
         )
         self.imag_kernel = tf.Variable(
             shape=kernel_shape,
-            initial_value=tf.random.uniform(kernel_shape, minval=-val, maxval=val, dtype=temp_dtype),
+            initial_value=tf.random.uniform(kernel_shape, minval=-val, maxval=val, dtype=tf.float32),
             name='imag_kernel',
             trainable=True,
-            dtype=temp_dtype
+            dtype=tf.float32
         )
+
 
         if self.use_bias:
             self.real_bias = tf.Variable(
                 shape=(self.units,),
-                initial_value=tf.zeros((self.units,), dtype=temp_dtype),
+                initial_value=tf.zeros((self.units,), dtype=tf.float32),
                 name='real_bias',
                 trainable=True,
-                dtype=temp_dtype
+                dtype=tf.float32
             )
             self.imag_bias = tf.Variable(
                 shape=(self.units,),
-                initial_value=tf.zeros((self.units,), dtype=temp_dtype),
+                initial_value=tf.zeros((self.units,), dtype=tf.float32),
                 name='imag_bias',
                 trainable=True,
-                dtype=temp_dtype
+                dtype=tf.float32
             )
         else:
             self.real_bias = None
             self.imag_bias = None
 
     def call(self, inputs):
+        # tf.keras.backend.set_floatx('float64')
         input_shape = K.shape(inputs)
-        input_dim = input_shape[-1]
+        input_dim = input_shape[-1]//2
+        real_input = inputs[:, :input_dim]
+        imag_input = inputs[:, input_dim:]
+
+        inputs = tf.complex(real_input, imag_input)
 
         w = tf.complex(self.real_kernel, self.imag_kernel)
         b = tf.complex(self.real_bias, self.imag_bias)
 
         output = tf.matmul(inputs, w) + b
-        if self.activation is not None:
-            r_output = tf.math.real(output)
-            r_output = self.activation(r_output)
-            i_output = tf.math.imag(output)
-            i_output = self.activation(i_output)
-            output = tf.complex(r_output, i_output)
-            # output = self.activation(output)
+        real_output = tf.math.real(output)
+        imag_output = tf.math.imag(output)
+        output = tf.concat([real_input, imag_input], axis=-1)
         return output
 
     def compute_output_shape(self, input_shape):
         assert input_shape and len(input_shape) == 2
         assert input_shape[-1]
         output_shape = list(input_shape)
-        output_shape[-1] = self.units
+        output_shape[-1] = self.units * 2
         return tuple(output_shape)
 
     def get_config(self):
+
         if self.kernel_initializer in {'complex'}:
             ki = self.kernel_initializer
         else:

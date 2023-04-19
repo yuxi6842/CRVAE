@@ -3,7 +3,6 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 
 datatype = 'complex128'
@@ -14,54 +13,84 @@ elif datatype == 'complex128':
     floattype = tf.float64
     complextype = tf.complex128
 
-def cmplx_kld(mu1, r1, s1, mu2=None, r2=None, s2=None):
+
+
+def cmplx_kld(mu, r, s):
     """compute dimension-wise KL-divergence
     -0.5 (1 + logvar - q_logvar - (exp(logvar) + (mu - q_mu)^2) / exp(q_logvar))
     q_mu, q_logvar assumed 0 is set to None
     """
-    # q(mu1, r1, s1)
-    r1 = tf.math.real(r1)
-    r1 = tf.math.exp(r1)
-    s1 = tf.math.exp(s1)
+    r = tf.math.real(r)
+    r = tf.math.exp(r)
+    s = tf.math.exp(s)
 
     # keep s<r
-    abs_s1 = tf.math.abs(s1)
-    # new_element = tf.zeros_like(s, dtype=complextype)
-    temp = r1 * 0.99 / abs_s1
-    if floattype == tf.float64:
-        temp = tf.complex(temp, np.double(0.))
-    else:
-        temp = tf.complex(temp, 0.)
-    new_element = s1 * temp
-    s1 = tf.where(abs_s1 >= tf.abs(r1), new_element, s1)
-
-    # p(mu2, r2, 0)
-    if mu2 is None:
-        mu2 = tf.zeros_like(mu1, dtype=complextype)
-
-    if r2 is None:
-        r2 = tf.zeros_like(mu1, dtype=complextype)
-
-    r2 = tf.math.real(r2)
-    r2 = tf.math.exp(r2)
+    abs_s = tf.math.abs(s)
+    new_element = tf.zeros_like(s, dtype=complextype)
+    s = tf.where(abs_s >= tf.abs(r), new_element, s)
 
     # kl divergence calculation
-    term1 = tf.math.log(tf.pow(r1, 2) - tf.pow(tf.abs(s1), 2))
-    term2 = tf.pow(tf.math.abs(mu1), 2) + r1 + tf.pow(tf.math.abs(mu2), 2) - 2*tf.math.real(mu2)*tf.math.real(mu1) \
-            - 2*tf.math.imag(mu1)*tf.math.imag(mu2)
+    term1 = tf.math.log(tf.pow(r, 2) - tf.pow(tf.abs(s), 2))
 
-    out = - 0.5*term1 - 1 + tf.math.log(tf.math.abs(r2)) + term2 / r2
+    out = - 0.5*term1 - 1 + r + tf.math.pow(tf.math.abs(mu), 2)
     return out
-
-
 
 def log_cmplx_normal(x):
     out = - tf.math.log(np.pi) -tf.math.pow(tf.math.abs(x), 2)
     return out
 
 
+def kld(mu, logvar, q_mu=None, q_logvar=None):
+    """compute reaL-valued dimension-wise KL-divergence
+    -0.5 (1 + logvar - q_logvar - (exp(logvar) + (mu - q_mu)^2) / exp(q_logvar))
+    q_mu, q_logvar assumed 0 is set to None
+    """
+    if q_mu is None:
+        q_mu = tf.zeros_like(mu)
+    else:
+        print("using non-default q_mu %s" % q_mu)
 
-# float64-version sample complex Gaussian
+    if q_logvar is None:
+        q_logvar = tf.zeros_like(logvar)
+    else:
+        print("using non-default q_logvar %s" % q_logvar)
+
+    if isinstance(mu, tf.Tensor):
+        mu_shape = mu.get_shape().as_list()
+    else:
+        mu_shape = list(np.asarray(mu).shape)
+
+    if isinstance(q_mu, tf.Tensor):
+        q_mu_shape = q_mu.get_shape().as_list()
+    else:
+        q_mu_shape = list(np.asarray(q_mu).shape)
+
+    if isinstance(logvar, tf.Tensor):
+        logvar_shape = logvar.get_shape().as_list()
+    else:
+        logvar_shape = list(np.asarray(logvar).shape)
+
+    if isinstance(q_logvar, tf.Tensor):
+        q_logvar_shape = q_logvar.get_shape().as_list()
+    else:
+        q_logvar_shape = list(np.asarray(q_logvar).shape)
+
+    if not np.all(mu_shape == logvar_shape):
+        raise ValueError("mu_shape (%s) and logvar_shape (%s) does not match" % (
+            mu_shape, logvar_shape))
+    if not np.all(mu_shape == q_mu_shape):
+        raise ValueError("mu_shape (%s) and q_mu_shape (%s) does not match" % (
+            mu_shape, q_mu_shape))
+    if not np.all(mu_shape == q_logvar_shape):
+        raise ValueError("mu_shape (%s) and q_logvar_shape (%s) does not match" % (
+            mu_shape, q_logvar_shape))
+
+    return -0.5 * (1 + logvar - q_logvar - \
+                   (tf.pow(mu - q_mu, 2) + tf.exp(logvar)) / tf.exp(q_logvar))
+
+
+
+
 def sample_cmplx_Guassian(mu, r, s):
     ''''
     input(complex values)
@@ -69,7 +98,7 @@ def sample_cmplx_Guassian(mu, r, s):
         r -> covariance
         s -> pseudo covariance
     output(complex values)
-        h -> [real_h+1j*imag_h]
+        h -> [real_h, imag_h]
     '''
     r = tf.math.real(r)
     r = tf.math.exp(r)
@@ -80,7 +109,6 @@ def sample_cmplx_Guassian(mu, r, s):
 
         # keep s<=r
         abs_s = tf.math.abs(s)
-        # new_element = tf.zeros_like(s, dtype=complextype)
         temp = r * 0.99 / abs_s
         if floattype == tf.float64:
             temp = tf.complex(temp, np.double(0.))
@@ -92,6 +120,7 @@ def sample_cmplx_Guassian(mu, r, s):
     re_s = tf.math.real(s)
     im_s = tf.math.imag(s)
 
+
     xepsilon = tf.random.normal(tf.shape(mu), name='xepsilon', dtype=floattype)
     yepsilon = tf.random.normal(tf.shape(mu), name='yepsilon', dtype=floattype)
 
@@ -99,7 +128,7 @@ def sample_cmplx_Guassian(mu, r, s):
     f2 = im_s / (r + re_s)
     temp1_f3 = tf.math.pow(r, 2)
     temp2_f3 = tf.math.pow(tf.math.abs(s), 2)
-    f3 = tf.math.sqrt((temp1_f3 - temp2_f3) / (2. * (r + re_s)))#, tf.cast(1e-10, tf.float32))
+    f3 = tf.math.sqrt((temp1_f3 - temp2_f3) / (2. * (r + re_s)))
 
     re_mu = tf.math.real(mu)
     im_mu = tf.math.imag(mu)

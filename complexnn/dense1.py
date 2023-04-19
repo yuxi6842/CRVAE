@@ -1,20 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# original code link: https://github.com/ChihebTrabelsi/deep_complex_networks
+#
 # Authors: Chiheb Trabelsi
 #
-import tensorflow as tf
-from tensorflow import keras
-
-from tensorflow.keras import backend as K
-import sys
-
-sys.path.append('.')
 import tensorflow.compat.v1 as tf
-from tensorflow.keras import activations, initializers, regularizers, constraints
-from tensorflow.keras.layers import Layer, InputSpec
+from tensorflow.compat.v1 import keras
+
+from tensorflow.compat.v1.keras import backend as K
+import sys; sys.path.append('.')
+from tensorflow.compat.v1.keras import activations, initializers, regularizers, constraints
+from tensorflow.compat.v1.keras.layers import Layer, InputSpec
 import numpy as np
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 
 class ComplexDense(Layer):
@@ -65,7 +63,7 @@ class ComplexDense(Layer):
     def __init__(self, units,
                  activation=None,
                  use_bias=True,
-                 init_criterion=None,
+                 init_criterion='he',
                  kernel_initializer='complex',
                  bias_initializer='zeros',
                  kernel_regularizer=None,
@@ -74,8 +72,8 @@ class ComplexDense(Layer):
                  kernel_constraint=None,
                  bias_constraint=None,
                  seed=None,
-                 dtype=tf.complex128,
                  **kwargs):
+        # tf.keras.backend.set_floatx('float64')
         if 'input_shape' not in kwargs and 'input_dim' in kwargs:
             kwargs['input_shape'] = (kwargs.pop('input_dim'),)
         super(ComplexDense, self).__init__(**kwargs)
@@ -97,79 +95,119 @@ class ComplexDense(Layer):
             self.seed = np.random.randint(1, 10e6)
         else:
             self.seed = seed
-        self.input_spec = InputSpec(ndim=2)
-        self.supports_masking = True
-        self._dtype = dtype
+        # self.input_spec = InputSpec(ndim=2)
+        # self.supports_masking = True
 
     def build(self, input_shape):
-        if self._dtype == tf.complex64:
-            temp_dtype = tf.float32
-        else:
-            temp_dtype = tf.float64
+        # assert len(input_shape) == 2
+        # assert input_shape[-1] % 2 == 0
+        # tf.keras.backend.set_floatx('float64')
+
         input_dim = input_shape[-1]
         tf.get_seed(self.seed)
-        kernel_shape = (int(input_dim), self.units)
+        kernel_shape = (input_dim, self.units)
+        if self.init_criterion == 'he':
+            fan_in = kernel_shape[-2]
+            s = np.sqrt(2. / fan_in, dtype=np.float32)
 
-        val = np.math.sqrt(6. / (int(input_dim) + self.units)) * 0.5
-        self.real_kernel = tf.Variable(
+            # initializer = tf.keras.initializers.he_normal()
+            # s = initializer(shape=kernel_shape)
+        elif self.init_criterion == 'glorot':
+            initializer = tf.keras.initializers.glorot_normal()
+            s = initializer(shape=kernel_shape)
+
+        # Initialization using euclidean representation:
+        # rng.normal
+        def init_w_real(shape, dtype=None):
+            return tf.random.normal(
+                shape=kernel_shape,
+                mean=0,
+                stddev=s
+            )
+
+        def init_w_imag(shape, dtype=None):
+            return tf.random.normal(
+                shape=kernel_shape,
+                mean=0,
+                stddev=s
+            )
+
+        real_init = tf.random_normal_initializer(mean=0, stddev=s)
+        imag_init = tf.random_normal_initializer(mean=0, stddev=s)
+
+        self.real_kernel = self.add_weight(
             shape=kernel_shape,
-            initial_value=tf.random.uniform(kernel_shape, minval=-val, maxval=val, dtype=temp_dtype),
-            name='real_kernel',
-            trainable=True,
-            dtype=temp_dtype
+            initializer=real_init,
+            dtype=tf.float64,
+            name='real_kernel'
         )
-        self.imag_kernel = tf.Variable(
+        self.imag_kernel = self.add_weight(
             shape=kernel_shape,
-            initial_value=tf.random.uniform(kernel_shape, minval=-val, maxval=val, dtype=temp_dtype),
-            name='imag_kernel',
-            trainable=True,
-            dtype=temp_dtype
+            initializer=imag_init,
+            dtype=tf.float64,
+            name='imag_kernel'
         )
+
+        print('real_kernel ', self.real_kernel)
+        print('imag_kernel ', self.imag_kernel)
 
         if self.use_bias:
-            self.real_bias = tf.Variable(
+            self.rbias = self.add_weight(
                 shape=(self.units,),
-                initial_value=tf.zeros((self.units,), dtype=temp_dtype),
-                name='real_bias',
-                trainable=True,
-                dtype=temp_dtype
+                initializer=self.bias_initializer,
+                name='bias',
+                regularizer=self.bias_regularizer,
+                constraint=self.bias_constraint,
+                dtype=tf.float64
             )
-            self.imag_bias = tf.Variable(
+            self.ibias = self.add_weight(
                 shape=(self.units,),
-                initial_value=tf.zeros((self.units,), dtype=temp_dtype),
-                name='imag_bias',
-                trainable=True,
-                dtype=temp_dtype
+                initializer=self.bias_initializer,
+                name='bias',
+                regularizer=self.bias_regularizer,
+                constraint=self.bias_constraint,
+                dtype=tf.float64
             )
         else:
-            self.real_bias = None
-            self.imag_bias = None
+            self.bias = None
+
+        # self.input_spec = InputSpec(ndim=2, axes={-1: 2 * input_dim})
+        self.built = True
 
     def call(self, inputs):
-        input_shape = K.shape(inputs)
-        input_dim = input_shape[-1]
+        # tf.keras.backend.set_floatx('float64')
 
-        w = tf.complex(self.real_kernel, self.imag_kernel)
-        b = tf.complex(self.real_bias, self.imag_bias)
+        # input_shape = K.shape(inputs)
+        # input_dim = input_shape[-1] // 2
+        # real_input = inputs[:, :input_dim]
+        # imag_input = inputs[:, input_dim:]
 
-        output = tf.matmul(inputs, w) + b
-        if self.activation is not None:
-            r_output = tf.math.real(output)
-            r_output = self.activation(r_output)
-            i_output = tf.math.imag(output)
-            i_output = self.activation(i_output)
-            output = tf.complex(r_output, i_output)
-            # output = self.activation(output)
+        self.w = tf.complex(self.real_kernel, self.imag_kernel)
+        self.bias = tf.complex(self.rbias, self.ibias)
+        print('w', self.w)
+        print('inputs ', inputs)
+        print('bias', self.bias)
+        output = tf.matmul(inputs, self.w) + self.bias
+
+        # output = K.dot(inputs, cat_kernels_4_complex)
+        #
+        # if self.use_bias:
+        #     output = K.bias_add(output, self.bias)
+        # if self.activation is not None:
+        #     output = self.activation(output)
+
         return output
 
     def compute_output_shape(self, input_shape):
         assert input_shape and len(input_shape) == 2
         assert input_shape[-1]
         output_shape = list(input_shape)
-        output_shape[-1] = self.units
+        # output_shape[-1] = 2 * self.units
         return tuple(output_shape)
 
     def get_config(self):
+        # tf.keras.backend.set_floatx('float64')
+
         if self.kernel_initializer in {'complex'}:
             ki = self.kernel_initializer
         else:

@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+# original code link: https://github.com/v0lta/Complex-gated-recurrent-neural-networks
 
-#
-# Authors: Chiheb Trabelsi
-#
 import tensorflow as tf
 from tensorflow import keras
 
@@ -15,6 +13,9 @@ from tensorflow.keras import activations, initializers, regularizers, constraint
 from tensorflow.keras.layers import Layer, InputSpec
 import numpy as np
 import collections
+from tensorflow.python.ops import array_ops
+from tensorflow.python.util import nest
+from .custom_regularizers import complex_dropout
 
 from .activation_functions import mod_relu, split_relu, hirose, mod_sigmoid, mod_sigmoid_beta
 
@@ -41,7 +42,6 @@ def arjovski_init(shape, dtype=tf.float64, partition_info=None):
          Arjovsky et al. Unitary Evolution Recurrent Neural Networks
          https://arxiv.org/abs/1511.06464
     '''
-    print("Arjosky basis initialization.")
     assert shape[0] == shape[1]
     omega1 = np.random.uniform(-np.pi, np.pi, shape[0])
     omega2 = np.random.uniform(-np.pi, np.pi, shape[0])
@@ -81,11 +81,11 @@ def arjovski_init(shape, dtype=tf.float64, partition_info=None):
     unitary = np.matmul(D3, step6)
     eye_test = np.matmul(np.transpose(np.conj(unitary)), unitary)
     unitary_test = np.linalg.norm(np.eye(shape[0]) - eye_test)
-    print('I - Wi.H Wi', unitary_test, unitary.dtype)
     assert unitary_test < 1e-10, "Unitary initialization not unitary enough."
     stacked = np.stack([np.real(unitary), np.imag(unitary)], -1)
     assert stacked.shape == tuple(shape), "Unitary initialization shape mismatch."
     return tf.constant(stacked, dtype)
+
 
 
 def complex_matmul(x, num_proj, scope, reuse, bias=False, bias_init_r=0.0,
@@ -116,6 +116,7 @@ def complex_matmul(x, num_proj, scope, reuse, bias=False, bias_init_r=0.0,
     Simply setting split_orthogonal or unitary to True is not enough.
     Use the Stiefel optimizer as well to enforce orthogonality/unitarity.
     """
+
     in_shape = tf.Tensor.get_shape(x).as_list()
     with tf.variable_scope(scope, reuse=reuse):
         if unitary:
@@ -160,7 +161,8 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
                  reuse=None,
                  stiefel=True,
                  single_gate=False,
-                 dtype=tf.complex128):
+                 dtype=tf.complex128,
+                 dropout=False):
         """
         Arguments:
             units: The size of the hidden state.
@@ -170,10 +172,8 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
             reuse: Reuse graph weights in existing scope.
             stiefel: If True the cell will be used using the Stiefel
                      optimization scheme from Wisdom et al.
-            real: If true a real valued cell will be created.
-            complex_input: If true the cell expects a complex input.
-            arjovski_basis: If true Arjovski et al.'s parameterization
-                            is used for the state transition matrix.
+            dtype: data type, default = tf.complex128
+            dropout: dropout or not
         """
         super().__init__(_reuse=reuse)
         self._units = units
@@ -183,6 +183,7 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
         self._gate_activation = gate_activation
         self._single_gate = single_gate
         self._dtype = dtype
+        self._dropout = dropout
 
 #     @tf.function
     @property
@@ -221,10 +222,7 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
                                  bias=True, bias_init_i=bias_init,
                                  bias_init_r=bias_init, dtype=temp_dtype)
             gr = ghr + gxr
-
             r = self._gate_activation(gr, 'r', self._reuse, dtype=temp_dtype)
-
-
             ghz = complex_matmul(h, self._units, scope='ghz', reuse=self._reuse, dtype=temp_dtype)
             gxz = complex_matmul(x, self._units, scope='gxz', reuse=self._reuse,
                                  bias=True, bias_init_i=bias_init,
@@ -268,8 +266,10 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
         elif self._dtype == tf.complex64:
             temp_dtype_ = tf.float32
         with tf.variable_scope("ComplexGatedRecurrentUnit", reuse=self._reuse):
-            # _, last_h = state
-            last_h = state
+            _, last_h = state
+
+            if self._dropout:
+                inputs = complex_dropout(inputs, 0.8)
 
             # use open gates initially when working with stiefel optimization.
             if self._stiefel:
@@ -284,6 +284,7 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
                 r, z = self.double_memory_gate(last_h, inputs, 'double_memory_gate',
                                                bias_init=bias_init, dtype=temp_dtype_)
 
+
             with tf.variable_scope("canditate_h"):
                 cinWx = complex_matmul(inputs, self._units, 'wx', bias=False,
                                        reuse=self._reuse, dtype=temp_dtype_)
@@ -291,15 +292,11 @@ class StiefelGatedRecurrentUnit(tf.nn.rnn_cell.RNNCell):
                                      bias=True, unitary=self._stiefel,
                                      reuse=self._reuse, dtype=temp_dtype_)
                 tmp = cinWx + rhU
-
                 h_bar = self._activation(tmp)
 
             new_h = (1 - z)*last_h + z*h_bar
-
             output = new_h
-            # output = tf.concat([tf.real(new_h), tf.imag(new_h)], axis=-1)
             newstate = URNNStateTuple(output, new_h)
-
             return output, newstate
 
 

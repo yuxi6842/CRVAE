@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-#
+# original code link: https://github.com/ChihebTrabelsi/deep_complex_networks
 # Authors: Dmitriy Serdyuk, Olexa Bilaniuk, Chiheb Trabelsi
 from tensorflow import keras
 
 import tensorflow.keras.backend as K
 from tensorflow.keras.layers import Layer, Lambda
 import tensorflow.compat.v1 as tf
-# Complex activation function
+
 
 def mod_relu(z, scope='', reuse=None, dtype=tf.float64):
     """
@@ -33,8 +33,6 @@ def mod_relu(z, scope='', reuse=None, dtype=tf.float64):
                             initializer=tf.random_uniform_initializer(-0.01, 0.01))
         modulus = tf.sqrt(tf.real(z)**2 + tf.imag(z)**2)
         rescale = tf.nn.relu(modulus + b) / (modulus + 1e-6)
-        # return tf.complex(rescale * tf.real(z),
-        #                   rescale * tf.imag(z))
         rescale = tf.complex(rescale, tf.zeros_like(rescale, dtype=dtype))
         return tf.multiply(rescale, z)
 
@@ -70,7 +68,7 @@ def hirose(z, scope='', reuse=None):
     Chapter 4.3.1 (Amplitude-Phase split complex approach)
     """
     with tf.variable_scope('hirose' + scope, reuse=reuse):
-        m = tf.get_variable('m', [], tf.float32,
+        m = tf.get_variable('m', [], tf.float64,
                             initializer=tf.random_uniform_initializer(0.9, 1.1))
         modulus = tf.sqrt(tf.real(z)**2 + tf.imag(z)**2)
         # use m*m to enforce positive m.
